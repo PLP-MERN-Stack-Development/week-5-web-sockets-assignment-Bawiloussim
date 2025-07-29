@@ -5,31 +5,45 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
+
 const path = require('path');
+const connectDB = require('./config/db');
+const messageController = require('./controllers/messageController');
+const authController = require('./controllers/authController');
 
 // Load environment variables
 dotenv.config();
+// Connexion à MongoDB
+connectDB();
 
 // Initialize Express app
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: process.env.CLIENT_URL,
     methods: ['GET', 'POST'],
     credentials: true,
   },
 });
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  credentials: true,
+}));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Store connected users and messages
+// Auth routes (à placer après les middlewares)
+app.post('/api/register', authController.register);
+app.post('/api/login', authController.login);
+
+// Store connected users, messages, rooms, and typing users
 const users = {};
 const messages = [];
 const typingUsers = {};
+const rooms = { general: [] };
 
 // Socket.io connection handler
 io.on('connection', (socket) => {
@@ -43,24 +57,34 @@ io.on('connection', (socket) => {
     console.log(`${username} joined the chat`);
   });
 
-  // Handle chat messages
-  socket.on('send_message', (messageData) => {
+  // Handle chat messages (with room and read receipts)
+  socket.on('send_message', async (messageData) => {
+    const room = messageData.room || 'general';
     const message = {
       ...messageData,
       id: Date.now(),
       sender: users[socket.id]?.username || 'Anonymous',
       senderId: socket.id,
       timestamp: new Date().toISOString(),
+      room,
+      readBy: [socket.id],
     };
-    
+    await messageController.createMessage(message);
     messages.push(message);
-    
-    // Limit stored messages to prevent memory issues
-    if (messages.length > 100) {
-      messages.shift();
+    if (!rooms[room]) rooms[room] = [];
+    rooms[room].push(message);
+    if (rooms[room].length > 100) rooms[room].shift();
+    io.to(room).emit('receive_message', message);
+    io.emit('notification', { type: 'new_message', message });
+  });
+
+  // Read receipt
+  socket.on('read_message', (messageId) => {
+    const msg = messages.find((m) => m.id === messageId);
+    if (msg && !msg.readBy.includes(socket.id)) {
+      msg.readBy.push(socket.id);
+      io.to(msg.room || 'general').emit('message_read', { messageId, userId: socket.id });
     }
-    
-    io.emit('receive_message', message);
   });
 
   // Handle typing indicator
@@ -78,7 +102,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle private messages
+  // Handle private messages (with read receipts)
   socket.on('private_message', ({ to, message }) => {
     const messageData = {
       id: Date.now(),
@@ -87,10 +111,23 @@ io.on('connection', (socket) => {
       message,
       timestamp: new Date().toISOString(),
       isPrivate: true,
+      readBy: [socket.id],
     };
-    
     socket.to(to).emit('private_message', messageData);
     socket.emit('private_message', messageData);
+    io.to(to).emit('notification', { type: 'private_message', message: messageData });
+  });
+
+  // Room management
+  socket.on('join_room', (room) => {
+    socket.join(room);
+    if (!rooms[room]) rooms[room] = [];
+    socket.emit('room_history', rooms[room]);
+    io.to(room).emit('notification', { type: 'user_joined_room', user: users[socket.id], room });
+  });
+  socket.on('leave_room', (room) => {
+    socket.leave(room);
+    io.to(room).emit('notification', { type: 'user_left_room', user: users[socket.id], room });
   });
 
   // Handle disconnection
@@ -98,21 +135,18 @@ io.on('connection', (socket) => {
     if (users[socket.id]) {
       const { username } = users[socket.id];
       io.emit('user_left', { username, id: socket.id });
+      io.emit('notification', { type: 'user_left', user: { username, id: socket.id } });
       console.log(`${username} left the chat`);
     }
-    
     delete users[socket.id];
     delete typingUsers[socket.id];
-    
     io.emit('user_list', Object.values(users));
     io.emit('typing_users', Object.values(typingUsers));
   });
 });
 
 // API routes
-app.get('/api/messages', (req, res) => {
-  res.json(messages);
-});
+app.get('/api/messages', messageController.getMessages);
 
 app.get('/api/users', (req, res) => {
   res.json(Object.values(users));
