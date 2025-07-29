@@ -30,10 +30,10 @@ exports.login = async (req, res) => {
     try {
         const { username, password } = req.body;
         const user = await User.findOne({ username });
-        if (!user) return res.status(400).json({ error: 'Utilisateur inconnu' });
+        if (!user) return res.status(400).json({ error: 'Unknown user' });
         const valid = await bcrypt.compare(password, user.password);
-        if (!valid) return res.status(400).json({ error: 'Mot de passe incorrect' });
-        res.json({ message: 'Connexion réussie', user: { username: user.username, id: user._id } });
+        if (!valid) return res.status(400).json({ error: 'Incorrect password' });
+        res.json({ message: 'Login successful', user: { username: user.username, id: user._id } });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

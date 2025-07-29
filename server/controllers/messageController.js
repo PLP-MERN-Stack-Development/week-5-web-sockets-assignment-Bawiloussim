@@ -16,7 +16,7 @@ exports.createMessage = async (data) => {
     await msg.save();
     return msg;
   } catch (err) {
-    console.error('Erreur création message:', err.message);
+    console.error('Message creation error:', err.message);
     return null;
   }
 };
