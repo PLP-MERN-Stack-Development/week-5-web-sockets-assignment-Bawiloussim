@@ -7,7 +7,7 @@ export function SocketProvider({ children }) {
     const [socket, setSocket] = useState(null);
 
     useEffect(() => {
-        const s = io('http://localhost:5000', { withCredentials: true });
+        const s = io('http://localhost:3000', { withCredentials: true });
         setSocket(s);
         return () => s.disconnect();
     }, []);
